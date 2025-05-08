@@ -9,6 +9,8 @@ from queue import Queue
 from src import logger
 from src import globals
 
+import logging
+
 DATABASE_FILE_NAME = "ninova_arsivci.db"
 TABLE_CREATION_QUERY = "CREATE TABLE files (id INTEGER PRIMARY KEY, path TEXT UNIQUE, hash INT, isDeleted INT DEFAULT 0);"
 TABLE_CHECK_QUERY = (
@@ -23,7 +25,9 @@ class FILE_STATUS(Enum):
     DELETED = 1
     EXISTS = 2
 
+
 FileRecord = namedtuple("FileRecord", "id, path")
+
 
 class DB:
     connection: sqlite3.Connection
@@ -33,8 +37,8 @@ class DB:
     @classmethod
     def init(cls):
         """
-        Connects to DB and checks and creates the table structure
-        If FIRST_RUN flag is checked and there is a DB file, it means that force download is active
+        Veritabanına bağlanır ve tablo yapısını kontrol eder ve oluşturur
+        Eğer FIRST_RUN bayrağı kontrol edilirse ve bir DB dosyası varsa, zorla indirme aktif demektir
         """
         cls.db_path = join(globals.BASE_PATH, DATABASE_FILE_NAME)
         if globals.FIRST_RUN:
@@ -46,12 +50,12 @@ class DB:
         cursor = cls.connection.cursor()
         if globals.FIRST_RUN:
             cursor.execute(TABLE_CREATION_QUERY)
-            logger.verbose("Veri tabanı ilk çalıştırma için hazırlandı.")
+            logger.verbose("Veritabanı ilk çalıştırma için hazırlandı.")
         else:
             cursor.execute(TABLE_CHECK_QUERY)
             if cursor.fetchone()[0] != "files":
                 logger.fail(
-                    f"Veri tabanı bozuk. '{DATABASE_FILE_NAME}' dosyasını silip tekrar başlatın. Silme işlemi sonrasında tüm dosyalar yeniden indirilir."
+                    f"Veritabanı bozuk. '{DATABASE_FILE_NAME}' dosyasını silip tekrar başlatın. Silme işlemi sonrasında tüm dosyalar yeniden indirilir."
                 )
 
         cursor.close()
@@ -59,36 +63,49 @@ class DB:
     @classmethod
     def connect(cls):
         """
-        Connects to DB using db_path class attribute
-        Sets connection object of the class, does not return anything
+        db_path sınıf niteliğini kullanarak DB'ye bağlanır
+        Sınıfın bağlantı nesnesini ayarlar, hiçbir şey döndürmez
         """
         try:
             cls.connection = sqlite3.connect(cls.db_path, check_same_thread=False)
-            logger.debug("Veri tabanına bağlandı.")
+            logger.debug("Veritabanına bağlandı.")
         except:
-            logger.fail("Veri tabanına bağlanılamadı.")
+            logger.fail("Veritabanına bağlanılamadı.")
 
-    # takes file_id, finds and returns the status from database
-    # file_id is the end of the file url (after question mark - question mark and 'g' is not included)
+    # file_id alır, veritabanından durumu bulur ve döner
+    # file_id, dosya URL'sinin sonu (soru işareti sonrası - soru işareti ve 'g' dahil değil)
     @classmethod
     def check_file_status(cls, file_id: int, cursor: sqlite3.Cursor):
-        cursor.execute(SELECT_FILE_BY_ID_QUERY, (file_id,))
-        file = cursor.fetchone()
-        if file:
-            deleted, id = file
-            if file_id != id:
-                logger.fail(
-                    "Eş zamanlı erişimden dolayı, race condition oluşturdu. Veri tabanından gelen bilgi, bu dosyaya ait değil. Geliştiriciye bildirin."
-                )
+        try:
+            logger.debug(f"file_id ile sorgu çalıştırılıyor: {file_id}")
+            cursor.execute(SELECT_FILE_BY_ID_QUERY, (file_id,))
+            file = cursor.fetchone()
+            logger.debug(f"file_id {file_id} için sorgu sonucu: {file}")
+            
+            if file:
+                deleted, id = file
+                if file_id != id:
+                    logger.fail(
+                        "Eş zamanlı erişim nedeniyle bir race condition oluştu. Veritabanından gelen bilgi bu dosyaya ait değil. Geliştiriciye bildirin."
+                    )
 
-            if deleted:
-                return FILE_STATUS.DELETED
+                if deleted:
+                    return FILE_STATUS.DELETED
+                else:
+                    return FILE_STATUS.EXISTS
             else:
-                return FILE_STATUS.EXISTS
-        else:
-            return FILE_STATUS.NEW
+                return FILE_STATUS.NEW
+        except sqlite3.InterfaceError as e:
+            logger.error(f"SQLite InterfaceError for file_id {file_id}: {e}")
+            raise
+        except sqlite3.Error as e:
+            logger.error(f"SQLite Hatası for file_id {file_id}: {e}")
+            raise
+        except Exception as e:
+            logger.error(f"check_file_status fonksiyonunda beklenmeyen hata for file_id {file_id}: {e}")
+            raise
 
-    # Should be called after the download
+    # indirme sonrası çağrılmalı
     @classmethod
     def add_file(cls, id: int, path: str):
         cls.to_add.put(FileRecord(id, path))
@@ -103,7 +120,7 @@ class DB:
         return cls.connection.cursor()
 
     @classmethod
-    @logger.speed_measure("Veri tabanına yazma", False, False)
+    @logger.speed_measure("Veritabanına yazma", False, False)
     def write_records(cls):
         cursor = cls.get_new_cursor()
         while not cls.to_add.empty():
@@ -114,11 +131,9 @@ class DB:
                     try:
                         cursor.execute(FILE_INSERTION_QUERY, (record.id, record.path, hash))
                     except Exception as e:
-                        logger.fail(str(e) + "\n The file_path is " + record.path)
+                        logger.fail(str(e) + "\n Dosya yolu: " + record.path)
                 logger.new_file(record.path)
             else:
                 logger.warning(f"Veritabanına yazılacak {record.path} dosyası bulunamadı. Veri tabanına yazılmayacak")
 
         cls.apply_changes_and_close()
-        
-        

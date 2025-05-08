@@ -1,4 +1,4 @@
-# Makes the given text colored and return the colored text
+# Verilen metni renklendirir ve renklendirilmiş metni döner
 
 from time import perf_counter
 
@@ -24,20 +24,22 @@ def fail(message):
     exit()
 
 def warning(message):
-    print("UYARI!" + _WARNING + message + _ENDC)
+    print("UYARI! " + _WARNING + message + _ENDC)
 
 
 def verbose(message):
     if _VERBOSE:
-        print("INFO: " + message)
+        print("BİLGİ: " + message)
 
 def new_file(file_path):
     print(_GREEN + "Yeni: " + file_path + _ENDC)
 
+def error(message):
+    print(_FAIL + "HATA! " + message + _ENDC)
 
 def debug(message):
     if _DEBUG:
-        print("UUT:  " + message)
+        print("DEBUG:  " + message)
 
 
 def speed_measure(debug_name: str, is_level_debug: bool, return_is_debug_info: bool = False):
@@ -50,10 +52,9 @@ def speed_measure(debug_name: str, is_level_debug: bool, return_is_debug_info: b
             additional_info = return_val[0] if return_is_debug_info else ""
 
             if is_level_debug:
-                debug(f"{additional_info[:_FILE_NAME_MAX_LENGTH]:<30} {debug_name} {end-start} saniyede tamamlandı.")
+                debug(f"{additional_info[:_FILE_NAME_MAX_LENGTH]:<30} {debug_name} {end - start} saniyede tamamlandı.")
             else:
-                verbose(f"{additional_info[:_FILE_NAME_MAX_LENGTH]:<30} {debug_name} {end-start} saniyede tamamlandı.")
-
+                verbose(f"{additional_info[:_FILE_NAME_MAX_LENGTH]:<30} {debug_name} {end - start} saniyede tamamlandı.")
 
             return return_val
     

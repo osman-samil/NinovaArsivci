@@ -30,7 +30,7 @@ def init_globals():
 
 def _get_argv_dict():
     """
-    Returns command line arguments as python dict
+    Komut satırı argümanlarını python dict olarak döner
     """
     return get_args(d=1, u=2, debug=0, verbose=0)
 
@@ -39,22 +39,21 @@ def _get_debug_verbose():
 
 def _get_directory():
     """
-    Gets the directory from command line if exists, else shows a folder dialog\n
-    Guarantees that the returned path exists, if the path does not exists than exits with error\n
-    Accesses to '.last_dir' file to get last used directory
+    Komut satırından dizini alır, yoksa klasör dialogu gösterir\n
+    Dönüş yolunun mevcut olduğunu garanti eder, mevcut değilse hata verir\n
+    Son kullanılan dizini almak için '.last_dir' dosyasına erişir
     """
 
-    # Get last selected directory from file
+    # Dosyadan son seçilen dizini al
     try:
-        default_dir_file = open(join(getcwd(), ".last_dir"), "r")
-        default_dir = default_dir_file.read().strip()
+        with open(join(getcwd(), ".last_dir"), "r", encoding="utf-8") as default_dir_file:
+            default_dir = default_dir_file.read().strip()
     except:
         default_dir = getcwd()
 
-
     if "d" in ARGV:
         if exists(ARGV["d"][0]):
-            # Get download directory from command line
+            # Komut satırından indirme dizinini al
             download_directory = ARGV["d"][0]
         else:
             logger.warning(
@@ -72,16 +71,17 @@ def _get_directory():
         logger.fail(f"Verilen '{download_directory}' geçerli bir klasör değil!")
 
     try:
-        default_dir_file = open(join(getcwd(), ".last_dir"), "w")
-        default_dir_file.write(download_directory)
-    finally:
-        default_dir_file.close()
+        # Dizini UTF-8 kodlaması ile dosyaya yaz
+        with open(join(getcwd(), ".last_dir"), "w", encoding="utf-8") as default_dir_file:
+            default_dir_file.write(download_directory)
+    except Exception as e:
+        logger.warning(f"Son seçilen dizini kaydederken hata oluştu: {e}")
 
     return download_directory
 
 def _get_first_run():
     """
-    Checks whether this is the first time that program ran on selected directory by checking database file
+    Seçilen dizinde bu programın ilk kez çalışıp çalışmadığını kontrol eder (veritabanı dosyasına bakarak)
     """
     if BASE_PATH:
         first_run = (not exists(join(BASE_PATH, "ninova_arsivci.db"))) or ("force" in ARGV)
@@ -91,12 +91,17 @@ def _get_first_run():
 
 def _get_session():
     """
-    Gets username and password from commandline if exists, else prompts user\n
+    Komut satırından kullanıcı adı ve şifre alır, yoksa kullanıcıdan istenir\n
     Eğer kullanıcı adı veya şifre yanlış ise
     """
     while True:
         if "u" in ARGV:
-            username, password = ARGV["u"]
+            try:
+                username, password = ARGV["u"]
+            except ValueError:
+                logger.warning("Kullanıcı bilgileri yeterli değil. Tekrar deneyin.")
+                del ARGV["u"]
+                continue
         else:
             username = input("Kullanıcı adı (@itu.edu.tr olmadan): ")
             password = getpass("Şifre: ")
@@ -105,13 +110,12 @@ def _get_session():
         try:
             session = login( (username, password) )
             return session
-        except:
+        except PermissionError:
+            logger.warning("Kullanıcı adı veya şifre hatalı. Tekrar deneyin.")
             try:
                 del ARGV["u"]
             except:
                 pass
-            logger.warning("Kullanıcı adı veya şifre hatalı. Tekrar deneyin.")
-
 
 def session_copy():
     return copy.copy(SESSION)

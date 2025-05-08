@@ -1,5 +1,5 @@
-# getpass does not show anything while password is entered but pwinput shows ***
-# pwinput looks better but it is not in standard library
+# getpass hiçbir şey göstermeden şifre girilmesine izin verir ama pwinput *** gösterir
+# pwinput daha iyi görünür ama standart kütüphanede değil
 
 # ---IMPORTS---
 try:
@@ -11,8 +11,7 @@ try:
     from src import globals
 except ModuleNotFoundError:
     print(
-        "HATA! Kütphaneler yüklenemedi. 'src' klasörü silinmiş veya yeri değişmiş olabilir."
-
+        "HATA! Kütüphaneler yüklenemedi. 'src' klasörü silinmiş veya yeri değişmiş olabilir."
     )
     exit()
 
@@ -27,7 +26,7 @@ def main():
     DB.write_records()
 
 
-# ---Program driving code---
+# ---Program yönlendirme kodu---
 if __name__ == "__main__":
     globals.init_globals()
     main()

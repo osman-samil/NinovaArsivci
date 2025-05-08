@@ -12,7 +12,7 @@ Course = namedtuple("Course", "code name link")
 COURSE_TITLE_OFFSET = 8
 
 
-# Returns the list of Courses object that has the course code, course name, and ninova link to course.
+# Kurs listesi döner: kurs kodu, kurs adı ve kursa ait ninova linki olan Course nesneleri
 def get_course_list() -> tuple[Course]:
     global URL
     course_list = []
@@ -41,7 +41,7 @@ def filter_courses(courses: tuple[Course]) -> tuple[Course]:
     for i, course in enumerate(courses):
         print(f"{i} - {course.code} | {course.name}")
     user_response = input(
-        """İndirmek istediğiniz derslerin numarlarını, aralarında boşluk bırkarak girin
+        """İndirmek istediğiniz derslerin numaralarını, aralarında boşluk bırakarak girin
 Tüm dersleri indirmek için boş bırakın ve enter'a basın
     > """
     )
@@ -51,7 +51,8 @@ Tüm dersleri indirmek için boş bırakın ve enter'a basın
         selected_indexes_raw = user_response.split(" ")
         for selected_index in selected_indexes_raw:
             try:
-                courses_filtered.append(courses[int(selected_index)])
+                index = int(selected_index)
+                courses_filtered.append(courses[index])
             except ValueError:
                 logger.warning(
                     f"Girilen '{selected_index}' bir sayı değil. Yok sayılacak."

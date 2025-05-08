@@ -6,27 +6,27 @@ def get_args(**arg_flags) -> dict:
     get_args(flag_name = parameter_count ...)
     get_args()
 
-    Give each flag (without dash '-' at the beggining) that you want to get from argv
-    Equal the flag_name to parameter_count that will be given after the flag
-    The args that you didn't specified are ignored
-    If an arg does not have enough arguments given, rises Exception
+    Kullanmak istediğiniz argüman bayraklarını argv'dan alır
+    Bayrak adına, bayraktan sonra verilecek parametre sayısını eşitler
+    Belirtilmeyen argümanlar yok sayılır
+    Eğer bir argümanın yeterli sayıda parametresi verilmemişse, İstisna (Exception) fırlatır
 
-    If no argument is given, then all flags and their parameter from argv is taken
+    Eğer hiç argüman verilmemişse, argv'daki tüm bayraklar ve parametreleri alınır
 
-    Returns a dictionary which keys are flag names and values are;
-        list of parameters if parameter_count > 0
-        else None (you can check whether the flag is given or not with "flag_name in arg_dict")
+    Anahtarları bayrak adları olan ve değerleri;
+        parameter_count > 0 ise parametre listesi
+        aksi halde None (bayrağın verilip verilmediğini "flag_name in arg_dict" ile kontrol edebilirsiniz)
 
-    Example:
-        Assume that your program is started as
+    Örnek:
+        Programınız şu şekilde başlatılmış olduğunu varsayın:
         python program.py -a -user username password -count 12
 
-        You should call the function as:
+        Fonksiyonu şu şekilde çağırmalısınız:
             get_args(a=0, user=2, count=1)
-            or
+            veya
             get_args()
-        Which returns
-            {"a" = None, "user" = [username, password], "count" = ["12"]}
+        Bu şu şekilde döner:
+            {"a": None, "user": ["username", "password"], "count": ["12"]}
 
     """
     arg_dict = dict()
@@ -35,7 +35,7 @@ def get_args(**arg_flags) -> dict:
         arg_index += 1
         while arg_index < len(argv):
             flag = argv[arg_index]
-            flag = flag[1:]  # remove dash sign before the flag
+            flag = flag[1:]  # bayraktaki '-' işaretini kaldır
             if flag in arg_flags:
                 if arg_flags[flag] == 0:
                     arg_dict[flag] = None
@@ -46,7 +46,7 @@ def get_args(**arg_flags) -> dict:
 
                         if arg_index >= len(argv) or argv[arg_index].startswith("-"):
                             raise Exception(
-                                f"Not enough parameter(s) given for the flag '-{flag}'"
+                                f"Bayrak '-{flag}' için yeterli parametre verilmedi"
                             )
 
                         params.append(argv[arg_index])

@@ -32,16 +32,16 @@ def login(user_secure_info: tuple) -> requests.Session:
         "User-Agent": "Mozilla/5.0 (X11; Linux x86_64; rv:104.0) Gecko/20100101 Firefox/104.0",
     }
 
-    # Requesting and parsing the page
+    # Sayfayı isteyip parse etme
     session = requests.Session()
     try:
         page = session.get(_URL, headers=HEADERS)
     except:
         logger.warning("Ninova sunucusuna bağlanılamadı.")
         if check_connection():
-            logger.fail("Internet var ancak Ninova'ya bağlanılamıyor.")
+            logger.fail("İnternet var ancak Ninova'ya bağlanılamıyor.")
         else:
-            logger.fail("Internete erişim yok. Bağlantınızı kontrol edin.")
+            logger.fail("İnternete erişim yok. Bağlantınızı kontrol edin.")
 
     page = BeautifulSoup(page.content, "lxml")
 
@@ -65,5 +65,4 @@ def _login_request(session: requests.Session, post_data: dict, page: BeautifulSo
     )
     return page
 
-# Function debug names
-
+# Fonksiyon debug isimleri

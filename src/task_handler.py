@@ -18,6 +18,6 @@ def start_tasks(courses: list[Course]) -> None:
         proc.start()
         proc_list.append(proc)
 
-    print("İndiriyor... Bu işlem birkaç dakika sürebilir.")
+    print("İndiriliyor... Bu işlem birkaç dakika sürebilir.")
     for proc in proc_list:
         proc.join()
