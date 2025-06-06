@@ -24,6 +24,7 @@ def main():
     start_tasks(courses)
 
     DB.write_records()
+    DB.apply_changes_and_close()
 
 
 # ---Program yönlendirme kodu---

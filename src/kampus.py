@@ -8,7 +8,7 @@ from src import globals
 from src.login import URL
 from src import logger
 
-Course = namedtuple("Course", "code name link")
+Course = namedtuple("Course", "code name crn link")
 COURSE_TITLE_OFFSET = 8
 
 
@@ -16,30 +16,67 @@ COURSE_TITLE_OFFSET = 8
 def get_course_list() -> tuple[Course]:
     global URL
     course_list = []
-
+    processed_crns = set() # Use a set to track processed CRNs for uniqueness
     session = globals.SESSION
 
-    page = BeautifulSoup(session.get(URL + "/Kampus1").content.decode("utf-8"), "lxml")
+    response = session.get(URL + "/Kampus1")
+    raw_html = response.content.decode("utf-8")
+    page = BeautifulSoup(raw_html, "lxml")
 
-    erisim_agaci = page.select(".menuErisimAgaci>ul>li")
-    for element in erisim_agaci:
-        link = element.find("a")["href"]
-        ders_info = BeautifulSoup(
-            session.get(URL + link + "/SinifBilgileri").content.decode("utf-8"), "lxml"
-        )
-        ders_info = ders_info.find(class_="formAbetGoster")
-        ders_info = ders_info.select("tr")
-        code = ders_info[0].select("td")[1].text.strip()
-        name = ders_info[1].select("td")[2].text.strip()
+    crn_link_tags = page.select('.menuErisimAgaci a[href*="/Sinif/"]')
+    
+    logger.verbose(f"Erişim Ağacı içinde {len(crn_link_tags)} adet ders bölümü (CRN) linki bulundu.")
 
-        course_list.append(Course(code, name, link))
+    if not crn_link_tags:
+        logger.warning("Erişim Ağacı'nda hiçbir ders bölümü (CRN) bulunamadı.")
+        return tuple()
+
+    for crn_link_tag in crn_link_tags:
+        try:
+            link_text = crn_link_tag.get_text(strip=True)
+            
+            if not link_text.startswith("CRN:"):
+                logger.verbose(f"Standart olmayan CRN linki atlanıyor: '{link_text}'")
+                continue
+
+            crn = link_text.replace("CRN:", "").strip()
+
+            # --- NEW: De-duplication logic ---
+            if crn in processed_crns:
+                logger.verbose(f"Yinelenen CRN {crn} atlanıyor.")
+                continue
+            processed_crns.add(crn)
+            # --- End of De-duplication logic ---
+
+            link = crn_link_tag["href"]
+            
+            ders_info_page = session.get(URL + link + "/SinifBilgileri").content.decode("utf-8")
+            ders_info_soup = BeautifulSoup(ders_info_page, "lxml")
+            
+            ders_info_table = ders_info_soup.find(class_="formAbetGoster")
+            if not ders_info_table:
+                logger.warning(f"CRN {crn} için sınıf bilgileri tablosu bulunamadı, atlanıyor.")
+                continue
+
+            ders_info_rows = ders_info_table.select("tr")
+            
+            code = ders_info_rows[0].select("td")[1].text.strip()
+            name = ders_info_rows[1].select("td")[2].text.strip()
+
+            course_list.append(Course(code, name, crn, link))
+            logger.verbose(f"Bulunan ders: {code} (CRN: {crn}) - {name}")
+
+        except Exception as e:
+            logger.warning(f"Bir ders/CRN ayrıştırılırken hata oluştu, atlanıyor: {e}")
 
     return tuple(course_list)
 
 
 def filter_courses(courses: tuple[Course]) -> tuple[Course]:
     for i, course in enumerate(courses):
-        print(f"{i} - {course.code} | {course.name}")
+        # Display the CRN to differentiate between sections of the same course
+        print(f"{i} - {course.code} (CRN: {course.crn}) | {course.name}")
+        
     user_response = input(
         """İndirmek istediğiniz derslerin numaralarını, aralarında boşluk bırakarak girin
 Tüm dersleri indirmek için boş bırakın ve enter'a basın
@@ -65,8 +102,9 @@ Tüm dersleri indirmek için boş bırakın ve enter'a basın
 
         indirilecek_dersler = ""
         for course in courses_filtered:
-            indirilecek_dersler += course.name + ", "
-        print(f"{indirilecek_dersler} dersleri indirilecek.")
+            # Add CRN to the confirmation message
+            indirilecek_dersler += f"{course.code} (CRN: {course.crn}), "
+        print(f"{indirilecek_dersler.strip(', ')} dersleri indirilecek.")
         return courses_filtered
     else:
         print("Tüm dersler indirilecek.")

@@ -22,6 +22,7 @@ from urllib.parse import unquote
 import os
 import uuid
 import requests
+import time
 
 MIN_FILE_SIZE_TO_LAUNCH_NEW_THREAD = 5  # MB, reverted from 0.01
 
@@ -34,9 +35,11 @@ thread_list: list[Thread] = []
 def download_all_in_course(course: Course) -> None:
     global URL
 
-    # Sanitize the course code for the main directory name
-    sanitized_course_code = sanitize_filename(course.code)
-    subdir_name = join(globals.BASE_PATH, sanitized_course_code)
+    # Create a unique folder name using the course code and CRN.
+    # This prevents conflicts between different sections of the same course.
+    unique_folder_name = f"{course.code} (CRN {course.crn})"
+    sanitized_folder_name = sanitize_filename(unique_folder_name)
+    subdir_name = join(globals.BASE_PATH, sanitized_folder_name)
 
     session = globals.session_copy()
 
@@ -100,14 +103,13 @@ def _download_or_traverse(raw_html: str, destionation_folder: str) -> None:
                     args=(
                         URL + file_link,
                         destionation_folder,
-                        DB.get_new_cursor(),
                     ),
                 )
                 large_file_thread.start()
                 thread_list.append(large_file_thread)
             else:
                 _download_file(
-                    URL + file_link, destionation_folder, DB.get_new_cursor()
+                    URL + file_link, destionation_folder
                 )
 
 
@@ -143,47 +145,58 @@ def _traverse_folder(folder_url, current_folder, new_folder_name):
     thread_list.append(folder_thread)
 
 
-def _download_file(file_url: str, destination_folder: str, cursor):
+def _download_file(file_url: str, destination_folder: str):
     session = globals.session_copy()
     
-    # --- Pre-download check to preserve archive and improve speed ---
+    # --- Pre-download DB check ---
     if not globals.FIRST_RUN:
         file_id = extract_file_id(file_url)
         if file_id != -1:
+            cursor = DB.get_new_cursor() 
             status = DB.check_file_status(file_id, cursor)
+            cursor.close()
             if status == FILE_STATUS.EXISTS:
                 logger.verbose(f"File with ID {file_id} already in DB. Skipping download.")
                 return
 
+    # --- NEW: Retry mechanism for network errors ---
     file_binary = None
     downloaded_filename = None
+    MAX_RETRIES = 3
+    RETRY_DELAY = 5 # seconds
 
-    try:
-        resp = session.get(file_url, stream=True, allow_redirects=True, timeout=(10, 60))
-        resp.raise_for_status()
-        
-        content_disposition = resp.headers.get('content-disposition', '')
-        if content_disposition:
-            try:
-                content_disposition = content_disposition.encode('latin1').decode('utf-8')
-            except UnicodeError:
-                pass
-        
-        downloaded_filename = extract_filename(content_disposition)
+    for attempt in range(MAX_RETRIES):
+        try:
+            resp = session.get(file_url, stream=True, allow_redirects=True, timeout=(10, 60))
+            resp.raise_for_status()
+            
+            content_disposition = resp.headers.get('content-disposition', '')
+            if content_disposition:
+                try:
+                    content_disposition = content_disposition.encode('latin1').decode('utf-8')
+                except UnicodeError:
+                    pass
+            
+            downloaded_filename = extract_filename(content_disposition)
 
-        if downloaded_filename:
-            downloaded_filename = sanitize_filename(downloaded_filename)
-        else:
-            downloaded_filename = sanitize_filename("unknown_" + str(uuid.uuid4())[:8] + ".bin")
-        
-        file_binary = resp.content
+            if downloaded_filename:
+                downloaded_filename = sanitize_filename(downloaded_filename)
+            else:
+                downloaded_filename = sanitize_filename("unknown_" + str(uuid.uuid4())[:8] + ".bin")
+            
+            file_binary = resp.content
+            break # Success, exit the retry loop
 
-    except requests.exceptions.RequestException as e:
-        logger.error(f"Error downloading {file_url}: {e}")
-        return
+        except requests.exceptions.RequestException as e:
+            logger.warning(f"Download failed for {file_url} on attempt {attempt + 1}/{MAX_RETRIES}. Retrying in {RETRY_DELAY}s... Error: {e}")
+            if attempt < MAX_RETRIES - 1:
+                time.sleep(RETRY_DELAY)
+            else:
+                logger.error(f"All download attempts failed for {file_url}. Skipping file.")
+                return # Give up after all retries
 
-    if not downloaded_filename:
-        logger.warning(f"Filename could not be determined for {file_url} after sanitization.")
+    if not downloaded_filename or file_binary is None:
+        logger.warning(f"Filename or binary content could not be determined for {file_url} after retries.")
         return
 
     try:
@@ -216,9 +229,6 @@ def _download_file(file_url: str, destination_folder: str, cursor):
                 file_full_name = join(destination_folder, new_filename_candidate)
             downloaded_filename = new_filename_candidate
         else:
-            # File with same name and content already exists. No need to do anything.
-            # The DB check at the start handles cases where it's already logged.
-            # This handles cases where the file exists locally but isn't in the DB yet (e.g., after a DB deletion).
             logger.verbose(
                 f"File {file_full_name} already exists with the same content. Skipping."
             )
