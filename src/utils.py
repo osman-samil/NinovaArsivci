@@ -1,34 +1,42 @@
 import re
 import os
 
-# Helper function to sanitize file and folder names
+def fix_turkish_characters(text: str) -> str:
+    """
+    Fixes text that was incorrectly decoded as latin1/iso-8859-1 instead of utf-8.
+    This is a common "mojibake" issue where multi-byte UTF-8 characters are
+    interpreted as single-byte characters.
+    """
+    try:
+        # This re-encodes the wrongly-decoded string back to its original bytes,
+        # then correctly decodes it as UTF-8.
+        return text.encode('latin1').decode('utf-8')
+    except (UnicodeEncodeError, UnicodeDecodeError):
+        # If it fails, the string was likely already correct or has a different issue.
+        return text
+
 def sanitize_filename(filename: str) -> str:
     """
     Sanitizes a filename or directory name by removing illegal characters,
     stripping leading/trailing whitespace, and truncating to a max length.
-    Properly handles Turkish characters.
+    Properly handles Turkish characters by first fixing them.
     """
     if not filename:
         return "_unknown_"
     
-    # First ensure proper encoding of Turkish characters
-    try:
-        filename = filename.encode('latin1').decode('utf-8')
-    except UnicodeError:
-        pass  # If encoding fails, use the original string
+    # First, fix potential character encoding issues.
+    filename = fix_turkish_characters(filename)
     
-    # Whitelist approach: Keep Unicode letters, numbers, underscore, whitespace, period, hyphen, parentheses, and specific Turkish chars.
+    # Whitelist approach: Keep Unicode letters, numbers, underscore, whitespace, period, hyphen, parentheses.
     # Replace anything else with a single underscore.
-    # \w includes underscore. \s includes space. Explicitly list . ( ) - and Turkish chars. Hyphen at the end.
     filename = re.sub(r'[^\w\s.()İıŞşĞğÇçÜüÖö-]', '_', filename, flags=re.UNICODE)
     
-    # Replace multiple underscores (possibly from previous step or original name) with a single one.
+    # Replace multiple underscores with a single one.
     filename = re.sub(r'_+', '_', filename)
     
     # Strip leading/trailing whitespace AND underscores. 
     filename = filename.strip(' _')
 
-    # If filename becomes empty after stripping (e.g., was all spaces/underscores or illegal chars)
     if not filename:
         return "_sanitized_empty_"
 
@@ -37,7 +45,6 @@ def sanitize_filename(filename: str) -> str:
     if len(filename) > MAX_COMPONENT_LENGTH:
         name, ext = os.path.splitext(filename)
         
-        # Handle cases like ".bashrc" where the name starts with a dot and has no other dot.
         if not ext and name == filename:
             filename = filename[:MAX_COMPONENT_LENGTH]
         else:
@@ -50,11 +57,9 @@ def sanitize_filename(filename: str) -> str:
                 if not filename:
                     return "_truncated_empty_"
 
-    # Final check for names that are problematic on Windows
     if filename.endswith('.'):
         filename = filename[:-1] + '_'
 
-    # Check for reserved names (case-insensitive on Windows)
     reserved_names = {"CON", "PRN", "AUX", "NUL"} | {f"COM{i}" for i in range(1, 10)} | {f"LPT{i}" for i in range(1, 10)}
     if filename.upper() in reserved_names:
         filename += "_"

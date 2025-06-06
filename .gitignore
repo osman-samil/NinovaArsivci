@@ -20,3 +20,7 @@ env/
 .last_dir
 debug_output/
 *.db
+
+#Generate Context
+generate_project_context.py
+project_context.txt
