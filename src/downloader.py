@@ -14,6 +14,8 @@ from zlib import crc32
 from src import globals
 from src.login import URL
 from src.db_handler import DB, FILE_STATUS
+from src.announcement_handler import archive_announcements_for_course
+from src.utils import sanitize_filename
 
 import re
 from urllib.parse import unquote
@@ -41,28 +43,26 @@ def download_all_in_course(course: Course) -> None:
     # Ensure base course directory exists
     os.makedirs(subdir_name, exist_ok=True)
 
-
+    # --- Sınıf Dosyaları ---
     raw_html_sinif = session.get(
         URL + course.link + SINIF_DOSYALARI_URL_EXTENSION
     ).content.decode("utf-8")
-
-    # Sanitize "Sınıf Dosyaları" folder name
     klasor_sinif_name = sanitize_filename("Sınıf Dosyaları")
     klasor_sinif_path = join(subdir_name, klasor_sinif_name)
     os.makedirs(klasor_sinif_path, exist_ok=True)
-
     _download_or_traverse(raw_html_sinif, klasor_sinif_path)
 
+    # --- Ders Dosyaları ---
     raw_html_ders = session.get(
         URL + course.link + DERS_DOSYALARI_URL_EXTENSION
     ).content.decode("utf-8")
-
-    # Sanitize "Ders Dosyaları" folder name
     klasor_ders_name = sanitize_filename("Ders Dosyaları")
     klasor_ders_path = join(subdir_name, klasor_ders_name)
     os.makedirs(klasor_ders_path, exist_ok=True)
-
     _download_or_traverse(raw_html_ders, klasor_ders_path)
+
+    # --- Duyurular (Delegated to the new handler) ---
+    archive_announcements_for_course(course, session)
 
     for thread in thread_list:
         thread.join()
@@ -146,44 +146,61 @@ def _traverse_folder(folder_url, current_folder, new_folder_name):
 def _download_file(file_url: str, destination_folder: str, cursor):
     session = globals.session_copy()
     
+    # --- Pre-download check to preserve archive and improve speed ---
+    if not globals.FIRST_RUN:
+        file_id = extract_file_id(file_url)
+        if file_id != -1:
+            status = DB.check_file_status(file_id, cursor)
+            if status == FILE_STATUS.EXISTS:
+                logger.verbose(f"File with ID {file_id} already in DB. Skipping download.")
+                return
+
     file_binary = None
     downloaded_filename = None
 
     try:
-        resp = session.get(file_url, stream=True, allow_redirects=True, timeout=(10, 60)) # Added timeout
-        resp.raise_for_status() # Raise HTTPError for bad responses (4xx or 5xx)
+        resp = session.get(file_url, stream=True, allow_redirects=True, timeout=(10, 60))
+        resp.raise_for_status()
         
         content_disposition = resp.headers.get('content-disposition', '')
+        if content_disposition:
+            try:
+                content_disposition = content_disposition.encode('latin1').decode('utf-8')
+            except UnicodeError:
+                pass
+        
         downloaded_filename = extract_filename(content_disposition)
 
-        # Sanitize the filename obtained from header or generated fallback
         if downloaded_filename:
             downloaded_filename = sanitize_filename(downloaded_filename)
         else:
             downloaded_filename = sanitize_filename("unknown_" + str(uuid.uuid4())[:8] + ".bin")
         
-        file_binary = resp.content # Get content after successful header processing
+        file_binary = resp.content
 
     except requests.exceptions.RequestException as e:
         logger.error(f"Error downloading {file_url}: {e}")
-        return # Stop processing this file if initial download fails
+        return
 
-    if not downloaded_filename: # Should be handled by sanitize_filename providing a fallback
+    if not downloaded_filename:
         logger.warning(f"Filename could not be determined for {file_url} after sanitization.")
         return
 
-    file_full_name = join(destination_folder, downloaded_filename)
+    try:
+        file_full_name = join(destination_folder, downloaded_filename)
+        file_full_name = file_full_name.encode('utf-8').decode('utf-8')
+    except UnicodeError:
+        logger.error(f"Failed to encode file path: {file_full_name}")
+        return
 
-    # Dosya zaten mevcutsa ve hash eşleşmiyorsa yeni bir ad ver
     if exists(file_full_name):
         with open(file_full_name, "rb") as ex_file:
             existing_hash = crc32(ex_file.read())
         
-        # We already have file_binary and downloaded_filename from the first download attempt
         new_hash = crc32(file_binary)
 
         if new_hash != existing_hash:
-            extension_dot_index = downloaded_filename.rfind(".") # Use sanitized name
+            extension_dot_index = downloaded_filename.rfind(".")
             base_name_for_new = downloaded_filename
             ext_for_new = ""
             if extension_dot_index != -1:
@@ -193,22 +210,20 @@ def _download_file(file_url: str, destination_folder: str, cursor):
             new_filename_candidate = base_name_for_new + "_yeni" + ext_for_new
             counter = 1
             file_full_name = join(destination_folder, new_filename_candidate)
-            # Ensure the new name is also unique if "_yeni" already exists
             while exists(file_full_name):
                 counter += 1
                 new_filename_candidate = f"{base_name_for_new}_yeni_{counter}{ext_for_new}"
                 file_full_name = join(destination_folder, new_filename_candidate)
-            downloaded_filename = new_filename_candidate # Update filename to be saved
+            downloaded_filename = new_filename_candidate
         else:
-            if not globals.FIRST_RUN: # Potential manual intervention or already downloaded
-                logger.verbose(
-                    f"File {file_full_name} already exists with the same content. Skipping."
-                )
-            return # File is identical, no need to save or log to DB again if already there
-    # else: # File does not exist, file_binary is from the initial download above.
-        # No need for _download_from_server here if the first resp.content was successful.
-
-    # Dosyayı yazma
+            # File with same name and content already exists. No need to do anything.
+            # The DB check at the start handles cases where it's already logged.
+            # This handles cases where the file exists locally but isn't in the DB yet (e.g., after a DB deletion).
+            logger.verbose(
+                f"File {file_full_name} already exists with the same content. Skipping."
+            )
+            return
+    
     try:
         with open(file_full_name, "wb") as bin_file:
             bin_file.write(file_binary)
@@ -217,7 +232,6 @@ def _download_file(file_url: str, destination_folder: str, cursor):
         logger.error(f"Failed to write file {file_full_name}: {e}")
         return
 
-    # Veritabanına ekleme
     DB.add_file(extract_file_id(file_url), file_full_name)
 
 
@@ -225,7 +239,6 @@ def extract_filename(content_disposition: str) -> str:
     """
     A robust attempt to parse RFC 5987 (filename*=UTF-8\'\') or old-school filename=\"...\".
     The result of this function should be passed to sanitize_filename.
-    Removed decode_weird_turkish call.
     """
     if not content_disposition:
         return None
@@ -236,16 +249,26 @@ def extract_filename(content_disposition: str) -> str:
         encoded_part = match_filename_star.group(1).strip()
         if encoded_part.startswith("UTF-8''"):
             encoded_part = encoded_part[len("UTF-8''"):]
-        decoded = unquote(encoded_part, encoding='utf-8', errors='replace')
-        return decoded
+        try:
+            decoded = unquote(encoded_part, encoding='utf-8', errors='replace')
+            # Ensure proper handling of Turkish characters
+            decoded = decoded.encode('latin1').decode('utf-8')
+            return decoded
+        except UnicodeError:
+            return unquote(encoded_part, encoding='utf-8', errors='replace')
 
     # 2) Otherwise fallback to filename=
     match_filename = re.search(r'filename\s*=\s*("([^"]+)"|([^";]+))', content_disposition, flags=re.IGNORECASE)
     if match_filename:
         filename_candidate = match_filename.group(1)
         filename_candidate = filename_candidate.strip('"')
-        filename_candidate = unquote(filename_candidate, errors='replace')
-        return filename_candidate
+        try:
+            filename_candidate = unquote(filename_candidate, encoding='utf-8', errors='replace')
+            # Ensure proper handling of Turkish characters
+            filename_candidate = filename_candidate.encode('latin1').decode('utf-8')
+            return filename_candidate
+        except UnicodeError:
+            return unquote(filename_candidate, encoding='utf-8', errors='replace')
 
     return None
 
@@ -286,70 +309,3 @@ def _download_from_server(session, file_url: str): # This function is now primar
     except requests.exceptions.RequestException as e:
         logger.error(f"Secondary download attempt via _download_from_server for {file_url} failed: {e}")
         return "error_filename", b"" # Return empty bytes and error indicator
-
-
-# Helper function to sanitize file and folder names
-def sanitize_filename(filename: str) -> str:
-    """
-    Sanitizes a filename or directory name by removing illegal characters,
-    stripping leading/trailing whitespace, and truncating to a max length.
-    """
-    if not filename:
-        return "_unknown_"
-    
-    # Whitelist approach: Keep Unicode letters, numbers, underscore, whitespace, period, hyphen, parentheses, and specific Turkish chars.
-    # Replace anything else with a single underscore.
-    # \w includes underscore. \s includes space. Explicitly list . ( ) - and Turkish chars. Hyphen at the end.
-    filename = re.sub(r'[^\w\s.()İıŞşĞğÇçÜüÖö-]', '_', filename, flags=re.UNICODE)
-    
-    # Replace multiple underscores (possibly from previous step or original name) with a single one.
-    filename = re.sub(r'_+', '_', filename)
-    
-    # Strip leading/trailing whitespace AND underscores. 
-    # If a name becomes just "_", this will make it empty.
-    filename = filename.strip(' _')
-
-    # If filename becomes empty after stripping (e.g., was all spaces/underscores or illegal chars)
-    if not filename:
-        return "_sanitized_empty_"
-
-    # Truncate filename if it's too long, preserving extension.
-    MAX_COMPONENT_LENGTH = 100  # Max length for a single path component
-    if len(filename) > MAX_COMPONENT_LENGTH:
-        name, ext = os.path.splitext(filename)
-        
-        # Handle cases like ".bashrc" where the name starts with a dot and has no other dot.
-        # In this case, os.path.splitext(".bashrc") returns (".bashrc", "")
-        # and os.path.splitext("longfilename") returns ("longfilename", "")
-        if not ext and name == filename: # No extension, or name is like ".bashrc"
-            filename = filename[:MAX_COMPONENT_LENGTH]
-        else: # Has an extension
-            ext_len = len(ext)
-            # Reserve space for extension, truncate name part.
-            name = name[:MAX_COMPONENT_LENGTH - ext_len]
-            filename = name + ext
-            
-            # If the reconstructed filename is still too long (e.g., extension itself was too long)
-            # or if name became empty (e.g. MAX_COMPONENT_LENGTH was smaller than ext_len)
-            # then fall back to a hard truncation of the whole string.
-            if len(filename) > MAX_COMPONENT_LENGTH or (not name and ext):
-                 filename = filename[:MAX_COMPONENT_LENGTH]
-                 # ensure it's not empty after hard truncate
-                 if not filename: return "_truncated_empty_"
-
-
-    # Final check for names that are problematic on Windows like CON, PRN, AUX, NUL, COM1-9, LPT1-9
-    # Also, names cannot end with a period or a space on Windows.
-    # The .strip() above handles trailing spaces. Let's check for trailing periods.
-    if filename.endswith('.'):
-        filename = filename[:-1] + '_' # Replace trailing period with underscore
-
-    # Check for reserved names (case-insensitive on Windows)
-    reserved_names = {"CON", "PRN", "AUX", "NUL"} | {f"COM{i}" for i in range(1, 10)} | {f"LPT{i}" for i in range(1, 10)}
-    if filename.upper() in reserved_names:
-        filename += "_" # Append underscore if it's a reserved name
-    
-    if not filename: # If it somehow became empty after all this (e.g. was just ".")
-        return "_final_empty_fallback_"
-        
-    return filename
