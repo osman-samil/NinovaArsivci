@@ -1,12 +1,13 @@
 ================================================================================
 PROJECT CONTEXT
 ================================================================================
-Generated on: 2025-06-06 13:50:38
+Generated on: 2025-06-06 14:52:24
 Root directory: C:\Users\noctu\Desktop\Projeler\Ninova arşiv\NinovaArsivci
 
 FILE TREE
 ----------------------------------------
 ├── src
+│   ├── announcement_handler.py
 │   ├── argv_handler.py
 │   ├── db_handler.py
 │   ├── downloader.py
@@ -14,7 +15,8 @@ FILE TREE
 │   ├── kampus.py
 │   ├── logger.py
 │   ├── login.py
-│   └── task_handler.py
+│   ├── task_handler.py
+│   └── utils.py
 ├── .last_dir
 ├── README.md
 ├── main.py
@@ -52,12 +54,127 @@ def main():
     start_tasks(courses)
 
     DB.write_records()
+    DB.apply_changes_and_close()
 
 
 # ---Program yönlendirme kodu---
 if __name__ == "__main__":
     globals.init_globals()
     main()
+
+============================================================
+FILE: src\announcement_handler.py
+============================================================
+from __future__ import annotations
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from src.kampus import Course
+    import requests
+
+from os.path import join, exists
+import os
+from bs4 import BeautifulSoup
+
+from src import logger, globals
+from src.login import URL
+from src.utils import sanitize_filename
+
+DUYURULAR_URL_EXTENSION = "/Duyurular"
+
+def archive_announcements_for_course(course: Course, session: requests.Session):
+    """
+    Fetches, parses, and saves all announcements for a given course.
+    """
+    logger.verbose(f"'{course.code} (CRN: {course.crn})' için duyurular arşivleniyor...")
+
+    # Create a unique folder name using the course code and CRN.
+    unique_folder_name = f"{course.code} (CRN {course.crn})"
+    sanitized_folder_name = sanitize_filename(unique_folder_name)
+    course_base_path = join(globals.BASE_PATH, sanitized_folder_name)
+    
+    announcements_path = join(course_base_path, sanitize_filename("Duyurular"))
+    os.makedirs(announcements_path, exist_ok=True)
+
+    try:
+        # Fetch the announcements page
+        announcements_url = URL + course.link + DUYURULAR_URL_EXTENSION
+        response = session.get(announcements_url)
+        response.raise_for_status()
+        raw_html = response.content.decode("utf-8")
+        
+        # Parse and save the announcements
+        _parse_and_save_announcements(raw_html, announcements_path)
+
+    except Exception as e:
+        logger.error(f"'{course.code}' dersi için duyurular alınırken hata oluştu: {e}")
+
+
+def _parse_and_save_announcements(raw_html: str, destination_folder: str):
+    try:
+        soup = BeautifulSoup(raw_html, "lxml")
+        announcement_table = soup.select_one("#ctl00_ContentPlaceHolder1_gdvDuyurular")
+
+        if not announcement_table:
+            logger.verbose("Bu derste duyuru tablosu bulunamadı veya hiç duyuru yok.")
+            return
+
+        rows = announcement_table.find_all("tr")
+        if len(rows) <= 1: # Only a header row or empty
+            logger.verbose("Duyuru tablosu boş.")
+            return
+            
+        logger.verbose(f"Duyuru tablosunda {len(rows) - 1} adet satır bulundu, işleniyor...")
+            
+    except Exception as e:
+        logger.warning(f"Duyurular ayrıştırılırken bir hata oluştu: {e}")
+        return
+
+    # Skip header row by starting loop at index 1
+    # Each announcement is expected to be two rows: one for info, one for content.
+    i = 1
+    while i < len(rows) - 1: # Ensure there's a row after the current one
+        try:
+            info_row = rows[i]
+            content_row = rows[i+1]
+
+            # Heuristic: An info row has 2 cells, a content row has 1 cell with colspan.
+            info_cells = info_row.find_all("td")
+            content_cell = content_row.find("td")
+
+            if len(info_cells) >= 2 and content_cell and content_cell.get('colspan'):
+                logger.verbose(f"Potansiyel duyuru başlığı satırı {i}'de bulundu.")
+                title = info_cells[0].get_text(strip=True)
+                date_str = info_cells[1].get_text(strip=True)
+                content = content_cell.get_text("\n", strip=True)
+                
+                try:
+                    day, month, year = date_str.split('.')
+                    formatted_date = f"{year}-{month}-{day}"
+                except:
+                    formatted_date = date_str.replace('.', '-')
+
+                sanitized_title = sanitize_filename(title)
+                filename = f"{formatted_date} - {sanitized_title}.txt"
+                full_path = join(destination_folder, filename)
+
+                if not exists(full_path):
+                    with open(full_path, "w", encoding="utf-8") as f:
+                        f.write(f"Başlık: {title}\n")
+                        f.write(f"Tarih: {date_str}\n")
+                        f.write("="*40 + "\n\n")
+                        f.write(content)
+                    logger.new_file(full_path)
+                else:
+                    logger.verbose(f"Duyuru '{full_path}' zaten mevcut. Atlanıyor.")
+                
+                i += 2 # Successfully processed an announcement, skip both rows
+            else:
+                # This row is not part of a standard announcement, skip it.
+                i += 1
+        except Exception as e:
+            logger.warning(f"Bir duyuru işlenirken hata oluştu (satır {i}), atlanıyor: {e}")
+            i += 1 # Move to the next row to avoid an infinite loop
 
 ============================================================
 FILE: src\argv_handler.py
@@ -148,11 +265,10 @@ from os import remove as delete_file
 from enum import Enum
 from zlib import crc32
 from queue import Queue
+import threading  # Import the threading module
 
 from src import logger
 from src import globals
-
-import logging
 
 DATABASE_FILE_NAME = "ninova_arsivci.db"
 TABLE_CREATION_QUERY = "CREATE TABLE files (id INTEGER PRIMARY KEY, path TEXT UNIQUE, hash INT, isDeleted INT DEFAULT 0);"
@@ -173,52 +289,58 @@ FileRecord = namedtuple("FileRecord", "id, path")
 
 
 class DB:
-    connection: sqlite3.Connection
+    # Use threading.local() to store connection objects. Each thread will have its own.
+    _thread_local = threading.local()
     to_add = Queue()
     db_path: str
 
     @classmethod
+    def get_thread_safe_connection(cls):
+        """
+        Gets a database connection that is safe for the current thread.
+        If a connection does not exist for this thread, it creates one.
+        """
+        # Check if a connection exists for the current thread
+        if not hasattr(cls._thread_local, "connection"):
+            # If not, create a new one and store it in the thread-local storage
+            try:
+                cls._thread_local.connection = sqlite3.connect(cls.db_path, check_same_thread=True)
+                logger.debug(f"Thread {threading.get_ident()} created a new DB connection.")
+            except Exception as e:
+                logger.fail(f"Veritabanına bağlanılamadı: {e}")
+        return cls._thread_local.connection
+
+    @classmethod
     def init(cls):
         """
-        Veritabanına bağlanır ve tablo yapısını kontrol eder ve oluşturur
-        Eğer FIRST_RUN bayrağı kontrol edilirse ve bir DB dosyası varsa, zorla indirme aktif demektir
+        Initializes the DB path and prepares the database file for the main thread.
         """
         cls.db_path = join(globals.BASE_PATH, DATABASE_FILE_NAME)
         if globals.FIRST_RUN:
-            try:
+            if exists(cls.db_path):
                 delete_file(cls.db_path)
-            except:
-                pass
-        cls.connect()
-        cursor = cls.connection.cursor()
+        
+        # Get a connection for the main thread and set up the table
+        main_conn = cls.get_thread_safe_connection()
+        cursor = main_conn.cursor()
+        
         if globals.FIRST_RUN:
             cursor.execute(TABLE_CREATION_QUERY)
             logger.verbose("Veritabanı ilk çalıştırma için hazırlandı.")
         else:
             cursor.execute(TABLE_CHECK_QUERY)
-            if cursor.fetchone()[0] != "files":
+            result = cursor.fetchone()
+            if not result or result[0] != "files":
                 logger.fail(
                     f"Veritabanı bozuk. '{DATABASE_FILE_NAME}' dosyasını silip tekrar başlatın. Silme işlemi sonrasında tüm dosyalar yeniden indirilir."
                 )
-
         cursor.close()
 
     @classmethod
-    def connect(cls):
-        """
-        db_path sınıf niteliğini kullanarak DB'ye bağlanır
-        Sınıfın bağlantı nesnesini ayarlar, hiçbir şey döndürmez
-        """
-        try:
-            cls.connection = sqlite3.connect(cls.db_path, check_same_thread=False)
-            logger.debug("Veritabanına bağlandı.")
-        except:
-            logger.fail("Veritabanına bağlanılamadı.")
-
-    # file_id alır, veritabanından durumu bulur ve döner
-    # file_id, dosya URL'sinin sonu (soru işareti sonrası - soru işareti ve 'g' dahil değil)
-    @classmethod
     def check_file_status(cls, file_id: int, cursor: sqlite3.Cursor):
+        """
+        Checks the database for a given file_id using the provided cursor.
+        """
         try:
             logger.debug(f"file_id ile sorgu çalıştırılıyor: {file_id}")
             cursor.execute(SELECT_FILE_BY_ID_QUERY, (file_id,))
@@ -231,7 +353,6 @@ class DB:
                     logger.fail(
                         "Eş zamanlı erişim nedeniyle bir race condition oluştu. Veritabanından gelen bilgi bu dosyaya ait değil. Geliştiriciye bildirin."
                     )
-
                 if deleted:
                     return FILE_STATUS.DELETED
                 else:
@@ -248,38 +369,45 @@ class DB:
             logger.error(f"check_file_status fonksiyonunda beklenmeyen hata for file_id {file_id}: {e}")
             raise
 
-    # indirme sonrası çağrılmalı
     @classmethod
     def add_file(cls, id: int, path: str):
         cls.to_add.put(FileRecord(id, path))
 
     @classmethod
     def apply_changes_and_close(cls):
-        cls.connection.commit()
-        cls.connection.close()
+        """Closes the connection for the current thread."""
+        if hasattr(cls._thread_local, "connection"):
+            conn = cls._thread_local.connection
+            conn.commit()
+            conn.close()
+            logger.debug(f"Thread {threading.get_ident()} closed its DB connection.")
+            del cls._thread_local.connection
 
     @classmethod
     def get_new_cursor(cls):
-        return cls.connection.cursor()
+        """Gets a new cursor from the thread-safe connection."""
+        conn = cls.get_thread_safe_connection()
+        return conn.cursor()
 
     @classmethod
     @logger.speed_measure("Veritabanına yazma", False, False)
     def write_records(cls):
+        """Writes all queued records to the DB using the main thread's connection."""
         cursor = cls.get_new_cursor()
         while not cls.to_add.empty():
             record = cls.to_add.get()
             if exists(record.path):
                 with open(record.path, "rb") as file:
-                    hash = crc32(file.read())
+                    hash_val = crc32(file.read())
                     try:
-                        cursor.execute(FILE_INSERTION_QUERY, (record.id, record.path, hash))
+                        cursor.execute(FILE_INSERTION_QUERY, (record.id, record.path, hash_val))
                     except Exception as e:
                         logger.fail(str(e) + "\n Dosya yolu: " + record.path)
                 logger.new_file(record.path)
             else:
                 logger.warning(f"Veritabanına yazılacak {record.path} dosyası bulunamadı. Veri tabanına yazılmayacak")
-
-        cls.apply_changes_and_close()
+        
+        # apply_changes_and_close is called from main.py after this
 
 ============================================================
 FILE: src\downloader.py
@@ -300,12 +428,15 @@ from zlib import crc32
 from src import globals
 from src.login import URL
 from src.db_handler import DB, FILE_STATUS
+from src.announcement_handler import archive_announcements_for_course
+from src.utils import sanitize_filename
 
 import re
 from urllib.parse import unquote
 import os
 import uuid
 import requests
+import time
 
 MIN_FILE_SIZE_TO_LAUNCH_NEW_THREAD = 5  # MB, reverted from 0.01
 
@@ -318,37 +449,37 @@ thread_list: list[Thread] = []
 def download_all_in_course(course: Course) -> None:
     global URL
 
-    # Sanitize the course code for the main directory name
-    sanitized_course_code = sanitize_filename(course.code)
-    subdir_name = join(globals.BASE_PATH, sanitized_course_code)
+    # Create a unique folder name using the course code and CRN.
+    # This prevents conflicts between different sections of the same course.
+    unique_folder_name = f"{course.code} (CRN {course.crn})"
+    sanitized_folder_name = sanitize_filename(unique_folder_name)
+    subdir_name = join(globals.BASE_PATH, sanitized_folder_name)
 
     session = globals.session_copy()
 
     # Ensure base course directory exists
     os.makedirs(subdir_name, exist_ok=True)
 
-
+    # --- Sınıf Dosyaları ---
     raw_html_sinif = session.get(
         URL + course.link + SINIF_DOSYALARI_URL_EXTENSION
     ).content.decode("utf-8")
-
-    # Sanitize "Sınıf Dosyaları" folder name
     klasor_sinif_name = sanitize_filename("Sınıf Dosyaları")
     klasor_sinif_path = join(subdir_name, klasor_sinif_name)
     os.makedirs(klasor_sinif_path, exist_ok=True)
-
     _download_or_traverse(raw_html_sinif, klasor_sinif_path)
 
+    # --- Ders Dosyaları ---
     raw_html_ders = session.get(
         URL + course.link + DERS_DOSYALARI_URL_EXTENSION
     ).content.decode("utf-8")
-
-    # Sanitize "Ders Dosyaları" folder name
     klasor_ders_name = sanitize_filename("Ders Dosyaları")
     klasor_ders_path = join(subdir_name, klasor_ders_name)
     os.makedirs(klasor_ders_path, exist_ok=True)
-
     _download_or_traverse(raw_html_ders, klasor_ders_path)
+
+    # --- Duyurular (Delegated to the new handler) ---
+    archive_announcements_for_course(course, session)
 
     for thread in thread_list:
         thread.join()
@@ -386,14 +517,13 @@ def _download_or_traverse(raw_html: str, destionation_folder: str) -> None:
                     args=(
                         URL + file_link,
                         destionation_folder,
-                        DB.get_new_cursor(),
                     ),
                 )
                 large_file_thread.start()
                 thread_list.append(large_file_thread)
             else:
                 _download_file(
-                    URL + file_link, destionation_folder, DB.get_new_cursor()
+                    URL + file_link, destionation_folder
                 )
 
 
@@ -429,43 +559,60 @@ def _traverse_folder(folder_url, current_folder, new_folder_name):
     thread_list.append(folder_thread)
 
 
-def _download_file(file_url: str, destination_folder: str, cursor):
+def _download_file(file_url: str, destination_folder: str):
     session = globals.session_copy()
     
+    # --- Pre-download DB check ---
+    if not globals.FIRST_RUN:
+        file_id = extract_file_id(file_url)
+        if file_id != -1:
+            cursor = DB.get_new_cursor() 
+            status = DB.check_file_status(file_id, cursor)
+            cursor.close()
+            if status == FILE_STATUS.EXISTS:
+                logger.verbose(f"File with ID {file_id} already in DB. Skipping download.")
+                return
+
+    # --- NEW: Retry mechanism for network errors ---
     file_binary = None
     downloaded_filename = None
+    MAX_RETRIES = 3
+    RETRY_DELAY = 5 # seconds
 
-    try:
-        resp = session.get(file_url, stream=True, allow_redirects=True, timeout=(10, 60))
-        resp.raise_for_status()
-        
-        # Ensure proper encoding of content-disposition header
-        content_disposition = resp.headers.get('content-disposition', '')
-        if content_disposition:
-            try:
-                content_disposition = content_disposition.encode('latin1').decode('utf-8')
-            except UnicodeError:
-                pass  # If encoding fails, use the original string
-        
-        downloaded_filename = extract_filename(content_disposition)
+    for attempt in range(MAX_RETRIES):
+        try:
+            resp = session.get(file_url, stream=True, allow_redirects=True, timeout=(10, 60))
+            resp.raise_for_status()
+            
+            content_disposition = resp.headers.get('content-disposition', '')
+            if content_disposition:
+                try:
+                    content_disposition = content_disposition.encode('latin1').decode('utf-8')
+                except UnicodeError:
+                    pass
+            
+            downloaded_filename = extract_filename(content_disposition)
 
-        # Sanitize the filename obtained from header or generated fallback
-        if downloaded_filename:
-            downloaded_filename = sanitize_filename(downloaded_filename)
-        else:
-            downloaded_filename = sanitize_filename("unknown_" + str(uuid.uuid4())[:8] + ".bin")
-        
-        file_binary = resp.content
+            if downloaded_filename:
+                downloaded_filename = sanitize_filename(downloaded_filename)
+            else:
+                downloaded_filename = sanitize_filename("unknown_" + str(uuid.uuid4())[:8] + ".bin")
+            
+            file_binary = resp.content
+            break # Success, exit the retry loop
 
-    except requests.exceptions.RequestException as e:
-        logger.error(f"Error downloading {file_url}: {e}")
+        except requests.exceptions.RequestException as e:
+            logger.warning(f"Download failed for {file_url} on attempt {attempt + 1}/{MAX_RETRIES}. Retrying in {RETRY_DELAY}s... Error: {e}")
+            if attempt < MAX_RETRIES - 1:
+                time.sleep(RETRY_DELAY)
+            else:
+                logger.error(f"All download attempts failed for {file_url}. Skipping file.")
+                return # Give up after all retries
+
+    if not downloaded_filename or file_binary is None:
+        logger.warning(f"Filename or binary content could not be determined for {file_url} after retries.")
         return
 
-    if not downloaded_filename:
-        logger.warning(f"Filename could not be determined for {file_url} after sanitization.")
-        return
-
-    # Ensure proper encoding of file path
     try:
         file_full_name = join(destination_folder, downloaded_filename)
         file_full_name = file_full_name.encode('utf-8').decode('utf-8')
@@ -473,16 +620,14 @@ def _download_file(file_url: str, destination_folder: str, cursor):
         logger.error(f"Failed to encode file path: {file_full_name}")
         return
 
-    # Dosya zaten mevcutsa ve hash eşleşmiyorsa yeni bir ad ver
     if exists(file_full_name):
         with open(file_full_name, "rb") as ex_file:
             existing_hash = crc32(ex_file.read())
         
-        # We already have file_binary and downloaded_filename from the first download attempt
         new_hash = crc32(file_binary)
 
         if new_hash != existing_hash:
-            extension_dot_index = downloaded_filename.rfind(".") # Use sanitized name
+            extension_dot_index = downloaded_filename.rfind(".")
             base_name_for_new = downloaded_filename
             ext_for_new = ""
             if extension_dot_index != -1:
@@ -492,22 +637,17 @@ def _download_file(file_url: str, destination_folder: str, cursor):
             new_filename_candidate = base_name_for_new + "_yeni" + ext_for_new
             counter = 1
             file_full_name = join(destination_folder, new_filename_candidate)
-            # Ensure the new name is also unique if "_yeni" already exists
             while exists(file_full_name):
                 counter += 1
                 new_filename_candidate = f"{base_name_for_new}_yeni_{counter}{ext_for_new}"
                 file_full_name = join(destination_folder, new_filename_candidate)
-            downloaded_filename = new_filename_candidate # Update filename to be saved
+            downloaded_filename = new_filename_candidate
         else:
-            if not globals.FIRST_RUN: # Potential manual intervention or already downloaded
-                logger.verbose(
-                    f"File {file_full_name} already exists with the same content. Skipping."
-                )
-            return # File is identical, no need to save or log to DB again if already there
-    # else: # File does not exist, file_binary is from the initial download above.
-        # No need for _download_from_server here if the first resp.content was successful.
-
-    # Dosyayı yazma
+            logger.verbose(
+                f"File {file_full_name} already exists with the same content. Skipping."
+            )
+            return
+    
     try:
         with open(file_full_name, "wb") as bin_file:
             bin_file.write(file_binary)
@@ -516,7 +656,6 @@ def _download_file(file_url: str, destination_folder: str, cursor):
         logger.error(f"Failed to write file {file_full_name}: {e}")
         return
 
-    # Veritabanına ekleme
     DB.add_file(extract_file_id(file_url), file_full_name)
 
 
@@ -594,70 +733,6 @@ def _download_from_server(session, file_url: str): # This function is now primar
     except requests.exceptions.RequestException as e:
         logger.error(f"Secondary download attempt via _download_from_server for {file_url} failed: {e}")
         return "error_filename", b"" # Return empty bytes and error indicator
-
-
-# Helper function to sanitize file and folder names
-def sanitize_filename(filename: str) -> str:
-    """
-    Sanitizes a filename or directory name by removing illegal characters,
-    stripping leading/trailing whitespace, and truncating to a max length.
-    Properly handles Turkish characters.
-    """
-    if not filename:
-        return "_unknown_"
-    
-    # First ensure proper encoding of Turkish characters
-    try:
-        filename = filename.encode('latin1').decode('utf-8')
-    except UnicodeError:
-        pass  # If encoding fails, use the original string
-    
-    # Whitelist approach: Keep Unicode letters, numbers, underscore, whitespace, period, hyphen, parentheses, and specific Turkish chars.
-    # Replace anything else with a single underscore.
-    # \w includes underscore. \s includes space. Explicitly list . ( ) - and Turkish chars. Hyphen at the end.
-    filename = re.sub(r'[^\w\s.()İıŞşĞğÇçÜüÖö-]', '_', filename, flags=re.UNICODE)
-    
-    # Replace multiple underscores (possibly from previous step or original name) with a single one.
-    filename = re.sub(r'_+', '_', filename)
-    
-    # Strip leading/trailing whitespace AND underscores. 
-    filename = filename.strip(' _')
-
-    # If filename becomes empty after stripping (e.g., was all spaces/underscores or illegal chars)
-    if not filename:
-        return "_sanitized_empty_"
-
-    # Truncate filename if it's too long, preserving extension.
-    MAX_COMPONENT_LENGTH = 100
-    if len(filename) > MAX_COMPONENT_LENGTH:
-        name, ext = os.path.splitext(filename)
-        
-        # Handle cases like ".bashrc" where the name starts with a dot and has no other dot.
-        if not ext and name == filename:
-            filename = filename[:MAX_COMPONENT_LENGTH]
-        else:
-            ext_len = len(ext)
-            name = name[:MAX_COMPONENT_LENGTH - ext_len]
-            filename = name + ext
-            
-            if len(filename) > MAX_COMPONENT_LENGTH or (not name and ext):
-                filename = filename[:MAX_COMPONENT_LENGTH]
-                if not filename:
-                    return "_truncated_empty_"
-
-    # Final check for names that are problematic on Windows
-    if filename.endswith('.'):
-        filename = filename[:-1] + '_'
-
-    # Check for reserved names (case-insensitive on Windows)
-    reserved_names = {"CON", "PRN", "AUX", "NUL"} | {f"COM{i}" for i in range(1, 10)} | {f"LPT{i}" for i in range(1, 10)}
-    if filename.upper() in reserved_names:
-        filename += "_"
-    
-    if not filename:
-        return "_final_empty_fallback_"
-        
-    return filename
 
 ============================================================
 FILE: src\globals.py
@@ -797,7 +872,7 @@ from src import globals
 from src.login import URL
 from src import logger
 
-Course = namedtuple("Course", "code name link")
+Course = namedtuple("Course", "code name crn link")
 COURSE_TITLE_OFFSET = 8
 
 
@@ -805,30 +880,67 @@ COURSE_TITLE_OFFSET = 8
 def get_course_list() -> tuple[Course]:
     global URL
     course_list = []
-
+    processed_crns = set() # Use a set to track processed CRNs for uniqueness
     session = globals.SESSION
 
-    page = BeautifulSoup(session.get(URL + "/Kampus1").content.decode("utf-8"), "lxml")
+    response = session.get(URL + "/Kampus1")
+    raw_html = response.content.decode("utf-8")
+    page = BeautifulSoup(raw_html, "lxml")
 
-    erisim_agaci = page.select(".menuErisimAgaci>ul>li")
-    for element in erisim_agaci:
-        link = element.find("a")["href"]
-        ders_info = BeautifulSoup(
-            session.get(URL + link + "/SinifBilgileri").content.decode("utf-8"), "lxml"
-        )
-        ders_info = ders_info.find(class_="formAbetGoster")
-        ders_info = ders_info.select("tr")
-        code = ders_info[0].select("td")[1].text.strip()
-        name = ders_info[1].select("td")[2].text.strip()
+    crn_link_tags = page.select('.menuErisimAgaci a[href*="/Sinif/"]')
+    
+    logger.verbose(f"Erişim Ağacı içinde {len(crn_link_tags)} adet ders bölümü (CRN) linki bulundu.")
 
-        course_list.append(Course(code, name, link))
+    if not crn_link_tags:
+        logger.warning("Erişim Ağacı'nda hiçbir ders bölümü (CRN) bulunamadı.")
+        return tuple()
+
+    for crn_link_tag in crn_link_tags:
+        try:
+            link_text = crn_link_tag.get_text(strip=True)
+            
+            if not link_text.startswith("CRN:"):
+                logger.verbose(f"Standart olmayan CRN linki atlanıyor: '{link_text}'")
+                continue
+
+            crn = link_text.replace("CRN:", "").strip()
+
+            # --- NEW: De-duplication logic ---
+            if crn in processed_crns:
+                logger.verbose(f"Yinelenen CRN {crn} atlanıyor.")
+                continue
+            processed_crns.add(crn)
+            # --- End of De-duplication logic ---
+
+            link = crn_link_tag["href"]
+            
+            ders_info_page = session.get(URL + link + "/SinifBilgileri").content.decode("utf-8")
+            ders_info_soup = BeautifulSoup(ders_info_page, "lxml")
+            
+            ders_info_table = ders_info_soup.find(class_="formAbetGoster")
+            if not ders_info_table:
+                logger.warning(f"CRN {crn} için sınıf bilgileri tablosu bulunamadı, atlanıyor.")
+                continue
+
+            ders_info_rows = ders_info_table.select("tr")
+            
+            code = ders_info_rows[0].select("td")[1].text.strip()
+            name = ders_info_rows[1].select("td")[2].text.strip()
+
+            course_list.append(Course(code, name, crn, link))
+            logger.verbose(f"Bulunan ders: {code} (CRN: {crn}) - {name}")
+
+        except Exception as e:
+            logger.warning(f"Bir ders/CRN ayrıştırılırken hata oluştu, atlanıyor: {e}")
 
     return tuple(course_list)
 
 
 def filter_courses(courses: tuple[Course]) -> tuple[Course]:
     for i, course in enumerate(courses):
-        print(f"{i} - {course.code} | {course.name}")
+        # Display the CRN to differentiate between sections of the same course
+        print(f"{i} - {course.code} (CRN: {course.crn}) | {course.name}")
+        
     user_response = input(
         """İndirmek istediğiniz derslerin numaralarını, aralarında boşluk bırakarak girin
 Tüm dersleri indirmek için boş bırakın ve enter'a basın
@@ -854,8 +966,9 @@ Tüm dersleri indirmek için boş bırakın ve enter'a basın
 
         indirilecek_dersler = ""
         for course in courses_filtered:
-            indirilecek_dersler += course.name + ", "
-        print(f"{indirilecek_dersler} dersleri indirilecek.")
+            # Add CRN to the confirmation message
+            indirilecek_dersler += f"{course.code} (CRN: {course.crn}), "
+        print(f"{indirilecek_dersler.strip(', ')} dersleri indirilecek.")
         return courses_filtered
     else:
         print("Tüm dersler indirilecek.")
@@ -1025,3 +1138,72 @@ def start_tasks(courses: list[Course]) -> None:
     print("İndiriliyor... Bu işlem birkaç dakika sürebilir.")
     for proc in proc_list:
         proc.join()
+
+============================================================
+FILE: src\utils.py
+============================================================
+import re
+import os
+
+# Helper function to sanitize file and folder names
+def sanitize_filename(filename: str) -> str:
+    """
+    Sanitizes a filename or directory name by removing illegal characters,
+    stripping leading/trailing whitespace, and truncating to a max length.
+    Properly handles Turkish characters.
+    """
+    if not filename:
+        return "_unknown_"
+    
+    # First ensure proper encoding of Turkish characters
+    try:
+        filename = filename.encode('latin1').decode('utf-8')
+    except UnicodeError:
+        pass  # If encoding fails, use the original string
+    
+    # Whitelist approach: Keep Unicode letters, numbers, underscore, whitespace, period, hyphen, parentheses, and specific Turkish chars.
+    # Replace anything else with a single underscore.
+    # \w includes underscore. \s includes space. Explicitly list . ( ) - and Turkish chars. Hyphen at the end.
+    filename = re.sub(r'[^\w\s.()İıŞşĞğÇçÜüÖö-]', '_', filename, flags=re.UNICODE)
+    
+    # Replace multiple underscores (possibly from previous step or original name) with a single one.
+    filename = re.sub(r'_+', '_', filename)
+    
+    # Strip leading/trailing whitespace AND underscores. 
+    filename = filename.strip(' _')
+
+    # If filename becomes empty after stripping (e.g., was all spaces/underscores or illegal chars)
+    if not filename:
+        return "_sanitized_empty_"
+
+    # Truncate filename if it's too long, preserving extension.
+    MAX_COMPONENT_LENGTH = 100
+    if len(filename) > MAX_COMPONENT_LENGTH:
+        name, ext = os.path.splitext(filename)
+        
+        # Handle cases like ".bashrc" where the name starts with a dot and has no other dot.
+        if not ext and name == filename:
+            filename = filename[:MAX_COMPONENT_LENGTH]
+        else:
+            ext_len = len(ext)
+            name = name[:MAX_COMPONENT_LENGTH - ext_len]
+            filename = name + ext
+            
+            if len(filename) > MAX_COMPONENT_LENGTH or (not name and ext):
+                filename = filename[:MAX_COMPONENT_LENGTH]
+                if not filename:
+                    return "_truncated_empty_"
+
+    # Final check for names that are problematic on Windows
+    if filename.endswith('.'):
+        filename = filename[:-1] + '_'
+
+    # Check for reserved names (case-insensitive on Windows)
+    reserved_names = {"CON", "PRN", "AUX", "NUL"} | {f"COM{i}" for i in range(1, 10)} | {f"LPT{i}" for i in range(1, 10)}
+    if filename.upper() in reserved_names:
+        filename += "_"
+    
+    if not filename:
+        return "_final_empty_fallback_"
+        
+    return filename 

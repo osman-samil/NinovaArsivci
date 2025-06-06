@@ -1,6 +1,6 @@
 from typing import TYPE_CHECKING
 from os.path import exists, join
-from os import getcwd
+from os import getcwd, makedirs
 from tkinter.filedialog import askdirectory
 try:
     from pwinput import pwinput as getpass
@@ -17,10 +17,19 @@ BASE_PATH: str = None
 FIRST_RUN: bool = None
 SESSION = None
 ARGV: dict = None
+PROJECT_ROOT: str = None
+DEBUG_PATH: str = None
 
 
 def init_globals():
-    global BASE_PATH, FIRST_RUN, SESSION, ARGV
+    global BASE_PATH, FIRST_RUN, SESSION, ARGV, PROJECT_ROOT, DEBUG_PATH
+    
+    # --- NEW: Define project root and debug path ---
+    PROJECT_ROOT = getcwd()
+    DEBUG_PATH = join(PROJECT_ROOT, "debug_output")
+    makedirs(DEBUG_PATH, exist_ok=True) # Create the debug folder if it doesn't exist
+    # --- END NEW ---
+
     ARGV = _get_argv_dict()
     logger._DEBUG, logger._VERBOSE = _get_debug_verbose()
     BASE_PATH = _get_directory()
