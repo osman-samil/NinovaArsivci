@@ -2,4 +2,3 @@ requests
 lxml
 pwinput
 beautifulsoup4
-tk

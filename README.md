@@ -1,99 +1,84 @@
-# Ninova Arşivci v3.5
+# Ninova Arşivci v4.0
 
-Ninova Arşivci, [Ninova](https://ninova.itu.edu.tr/)'daki dosyaları topluca indirmek için yazılmış bir Python programıdır.  
+Ninova Arşivci, [Ninova](https://ninova.itu.edu.tr/)'daki ders materyallerini (dosyalar, duyurular, ödevler) topluca bilgisayarınıza indirmek için yazılmış bir Python programıdır.  
 (Ninova: İstanbul Teknik Üniversitesinin e-öğrenim merkezi)
 
-## v3.5 Özellikler
-* Artık hangi derslerin indirilebileceğini seçebilirsiniz. Kullanıcı adınız ve şifrenizi yazdıktan sonra hangi kursları indirmek istediğiniz sorulacaktır.
-* Daha açıklayıcı hata ve bilgilendirme mesajları eklendi
+## v4.0 Yeni Özellikler
+*   **Duyuru Arşivleme**: Artık her dersin duyuruları, `Duyurular` klasörü altında ayrı metin dosyaları (`.txt`) olarak kaydedilir. Dosya adları tarihe göre sıralanmıştır.
+*   **Ödev Arşivleme**: Artık derslere ait ödevler `Ödevler` klasörüne indiriliyor. Her ödev için ayrı bir klasör oluşturulur ve bu klasörün içinde ödevin açıklaması, tarihleri, kaynak dosyaları ve **sizin teslim ettiğiniz dosyalar** bulunur.
+*   **Daha Sağlam İndirme İşlemi**: Ağ bağlantısında anlık sorunlar yaşandığında indirme işlemi artık pes etmiyor. Başarısız olan indirmeler birkaç kez otomatik olarak yeniden denenir.
+*   **Gelişmiş Dosya Adı Desteği**: Türkçe karakterler ve özel semboller içeren dosya adları artık çok daha düzgün bir şekilde indirilip kaydediliyor. Bu, `dosya bulunamadı` hatalarını ve bozuk dosya adlarını önler.
+*   **Geliştirilmiş Hata Ayıklama**: Programın ana klasöründe otomatik olarak bir `debug_output` klasörü oluşturulur. Eğer program bir duyuru veya ödev sayfasını ayrıştırırken hata alırsa, sayfanın HTML kodunu bu klasöre kaydederek sorunun teşhisini kolaylaştırır.
+*   **Artırılmış Stabilite**: Çoklu iş parçacığı (multi-threading) kullanılırken veritabanı işlemlerinin daha kararlı çalışması için altyapı iyileştirildi.
 
-## v3 Yeni Özellikler
-* İndirilen yeni dosyalar, program sonunda ekrana yazdırılıyor.
-* Artık dosya kayıtları bir veri tabanında tutuluyor. Bu sayede aynı dosyaların tekrar indirilmesinin önüne geçildi.
-* Çoklu süreç sistemi, hıza katkısı olmadığı için kaldırıldı. Kod tabanı, tek çekirdekte çalışmak üzere optimize edildi.
-* "-core" komut satırı parametresi kaldırıldı. Program tek çekirdek üzerinde çalışıyor.
-* v3 sürümü v2 ile indirilmiş klasörlerde uyumlu çalışır. İndirme klasörünü v3'e yükseltmek için yeni sürümü indirin ve klasör üzerinde indirme işlemi yapın.
-* Hatalı şifre girildiğinde programı kapatmak yerine tekrar soruyor.
-* Klasör seçme penceresi, son seçilen klasörü hatırlıyor.
+## Diğer Özellikler
+*   İndirilecek dersleri seçme imkanı.
+*   Veritabanı desteği sayesinde daha önce indirilmiş dosyaların tekrar indirilmemesi.
+*   Son seçilen indirme klasörünü hatırlama.
+*   Hatalı şifre girildiğinde programın kapanmak yerine tekrar sorması.
 
 ## Kurulum
 Bu program [Python yorumlayıcısı (interpreter)](https://www.python.org/downloads/) gerektirir.
-1. Üst sağ köşedeki yeşil "Code" butonuna tıklayın ve zip olarak indirin
-2. NinovaArsivci-Nightly klasörünü zipten çıkarın.
-3. Çıkarttığınız klasöre girin ve aşağıdaki komutu yazın. Bu komut gerekli kütüphaneleri yükleyecektir.
+1.  Üst sağ köşedeki yeşil "Code" butonuna tıklayın ve zip olarak indirin.
+2.  İndirdiğiniz zip dosyasını bir klasöre çıkarın.
+3.  Çıkarttığınız klasöre girin ve aşağıdaki komutu çalıştırın. Bu komut gerekli kütüphaneleri yükleyecektir.
 ```bash
 pip install -r requirements.txt
 ```
 
-
 ## Kullanım
-1. Daha önceden zipten çıkartmış olduğunuz klasöre girin
-2. Buradan bir uçbirim (terminal) başlatın (Sağ tık > Uçbirimde aç)
-3. Aşağıdaki komut ile programı başlatın:
+1.  Daha önceden zipten çıkartmış olduğunuz klasöre girin.
+2.  Bu klasörde bir uçbirim (terminal) başlatın (Örn: Klasörde boş bir yere Sağ tık > Terminalde Aç).
+3.  Aşağıdaki komut ile programı başlatın:
 ```bash
 python main.py
 ```
-### Komut satırı komutları
-Kullanımı kolaylaştırmak ve otomasyonlara kolaylık sağlamak adına komut satırı parametreleri getirildi. Komutlar bir arada kullanılabilir ve sıralamaları önemli değildir.
+Program ilk çalıştığında sizden kullanıcı adı, şifre ve dosyaların indirileceği klasörü seçmenizi isteyecektir. Ardından dersleri listeleyip hangilerini indirmek istediğinizi soracaktır.
 
-1. "-u username password"
-Bu komutu kullanarak kullanıcı adı ve şifrenizi komut satırı üzerinden verebilirsiniz. Bu komut kullanıldığı taktirde program çalışırken kullanıcı adı ve şifre sorulmaz.
-Örnek kullanım:
+### Komut Satırı Parametreleri
+Kullanımı ve otomasyonu kolaylaştırmak için komut satırı parametreleri mevcuttur. Komutlar bir arada kullanılabilir ve sıralamaları önemli değildir.
+
+1.  **-u (username)**  
+    Kullanıcı adı ve şifrenizi komut satırı üzerinden verir. Program çalışırken bu bilgileri sormaz.
+    `python main.py -u kullaniciadim sifrem`
+
+2.  **-d (directory)**  
+    Dosyaların indirileceği klasörü belirtir. Program çalışırken klasör seçme penceresi açılmaz.
+    `python main.py -d "C:\Users\Bee\Desktop\Ninova"`
+
+3.  **-f (force)**  
+    Veritabanını yok sayarak tüm dosyaları en baştan indirir. Silinmiş dosyaları geri getirmek veya arşivi tamamen yenilemek için kullanışlıdır.
+    `python main.py -f`
+    
+4.  **-debug** ve **-verbose**  
+    Programın çalışması hakkında detaylı bilgi verir. `-verbose` hangi işlemin ne kadar sürdüğünü, `-debug` ise daha teknik detayları gösterir ve hata ayıklama için HTML dosyaları kaydedebilir.
+    `python main.py -verbose`
+
+Tüm komutların bir arada kullanımına örnek:
 ```bash
-python main.py -u bee20 psswd
-```
-2. "-d klasör"
-Bu komut ile hangi klasöre indirileceğini komut satırından seçebilirsiniz. Bu komut kullanıldığı taktirde program çalışırken indirme için klasör seçme penceresi açılmaz.
-Örnek kullanım:
-```bash
-python main.py -d "C:\Users\Bee\Desktop\Ninova"
+python main.py -u kullaniciadim sifrem -d "D:\Dersler\Ninova" -f -debug
 ```
 
-3. "-debug" ve "-verbose"
-Debug ve verbose bilgisini etkinleştirir. Verbose hangi işlemin kaç saniye sürdüğü bilgisini, debug ise daha detaylı bilgiler içerir. Debug modu seçildiği taktirde verbose komutları da görünecektir.
-```bash
-python main.py -verbose
-```
+## Sıkça Sorulan Sorular
+1.  **"HATA! src klasörü bulunamadı..." hatası alıyorum.**  
+    Programı arşivden çıkarırken `src` klasörünü de çıkardığınızdan emin olun. `main.py` dosyası `src` klasörü içindeki dosyalarla birlikte çalışır.
 
-Komutların bir arada kullanımına örnek:
-```bash
-python main.py -u Bee20 passwd -debug -verbose
-```
+2.  **"No such file or directory" hatası alıyorum.**  
+    Terminali açtığınız klasörün, `main.py` dosyasının bulunduğu klasör ile aynı olduğundan emin olun.
 
-## S.S.S.
-1. "HATA! src klasörü bulunamadı veya yeri değiştirilmiş. Programı yeniden indirin." diye bir hata alıyorum.  
-  Programı arşivden çıkarırken src klasörünü de çıkarmalısın. "main.py" dosyası src klasörü içindeki dosyalarla birlikte çalışır.  
-  Eğer hata devam ediyorsa, issues kısmından bana bildir.
+3.  **Şifrem güvende mi?**  
+    Evet. Şifreniz sadece Ninova'ya giriş yapmak için kullanılır, hiçbir yere kaydedilmez veya gönderilmez. Kodlar herkese açıktır, kendiniz de inceleyebilirsiniz.
 
-2. "No such file or directory" hatası alıyorum.  
-  Terminalin açıldığı klasör, main.py ile aynı klasör olmalı.
+4.  **"-d" komutu ile bir yol belirtmeme rağmen klasör seçme penceresi neden açılıyor?**  
+    Belirttiğiniz yolun geçerli ve erişilebilir olduğundan emin olun. Eğer yol bulunamazsa veya geçersizse, program güvenlik amacıyla tekrar sorar.
 
-3. Şifreleri topluyor musun? Şifrem güvende mi?  
-  Şifreler tamamen yerelde kalıyor ve Ninova'ya giriş yaptıktan sonra siliniyor.
-
-4. İndirme klasörünü "-d" komutu ile komut satırı üzerinden verdiğim halde klasör seçme penceresi açılıyor.  
-  Parametre olarak verdiğin yolu kontrol et. Eğer yol geçerli değilse, kullanıcıya sorar
-  
-5. İndirme klasörünü "-d" komutu ile komut satırı üzerinden verdiğim halde klasör seçme penceresi açılıyor.  
-  Parametre olarak verdiğin yolu kontrol et. Eğer yol geçerli değilse, kullanıcıya sorar
-  
-6. "Veri tabanına manuel müdahele tespit edildi!" hatası alıyorum. Ama ben veri tabanını değiştirmedim  
-  Eğer önceki indirme yarıda kesilmişse, veri tabanı bozulabilir. Bu hata önemli değildir ve program akışını etkilemez. Dosyalar indirilir.
-  
-7. Klasörler oluşturuluyor ama dosyalar indirilmiyor.  
-  Daha önce indirdiğin bir dosyayı silersen, tekrar indirilmez. Bu sorunu tüm dosyaları tekrardan indirerek çözebilirsin. Bunun için komut satırında çalıştırırken -f komutunu da ekle:  
-  ```bash
-  python main.py -f
-  ```
-
-
+5.  **Klasörler oluşturuluyor ama bazı dosyalar inmiyor.**  
+    Program, daha önce başarıyla indirdiği dosyaları veritabanına kaydeder ve tekrar indirmez. Eğer bir dosyayı sildiyseniz ve tekrar indirmek istiyorsanız, tüm arşivi yenilemek için programı `-f` (force) parametresi ile çalıştırın: `python main.py -f`. Bu, tüm dosyaların yeniden kontrol edilerek indirilmesini sağlar.
 
 ## Notlar
-* Eğer indirme klasöründe indirilen dosya ile aynı isimde farklı içerikte bir dosya varsa sonuna "_new" eklenerek kaydedilir.
-* İndirdiğiniz dosyaları değiştirseniz de programı çalıştırdığınızda Ninova'daki halleri indirilir ve üstüne yazılır.
-* Program çalıştırdığınızda yalnızca varolmayan dosyalar indirilir.
-* Programın tamamlanması süresi 2-3 dakika sürebilir.
-* Detaylı bilgileri görmek için programı çalıştırırken "-debug" ve "-verbose" parametrelerini ekleyin
+*   Eğer indirme klasöründe indirilen dosya ile aynı isimde fakat farklı içerikte bir dosya varsa, yeni indirilen dosyanın sonuna `_yeni` eklenerek kaydedilir.
+*   İndirdiğiniz dosyaları silseniz bile, veritabanı kaydı silinmediği sürece tekrar indirilmezler. Tüm arşivi yenilemek için `-f` komutunu kullanın.
+*   Programın tamamlanma süresi internet hızınıza ve ders sayınıza göre birkaç dakika sürebilir.
 
-## Hata bildirimi
-Programın github sayfasındaki "issues" sekmesi altından, aldığınız hataları veya önerilerinizi yazabilirsiniz.
+## Hata Bildirimi
+Programın GitHub sayfasındaki "Issues" sekmesi altından, aldığınız hataları veya önerilerinizi yazabilirsiniz.
