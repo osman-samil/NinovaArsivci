@@ -15,10 +15,10 @@ from src import globals
 from src.login import URL
 from src.db_handler import DB, FILE_STATUS
 from src.announcement_handler import archive_announcements_for_course
-from src.utils import sanitize_filename
+from src.homework_handler import archive_homeworks_for_course
+from src.utils import sanitize_filename, extract_filename
 
 import re
-from urllib.parse import unquote
 import os
 import uuid
 import requests
@@ -66,6 +66,9 @@ def download_all_in_course(course: Course) -> None:
 
     # --- Duyurular (Delegated to the new handler) ---
     archive_announcements_for_course(course, session)
+
+    # --- Ödevler (Delegated to the new handler) ---
+    archive_homeworks_for_course(course, session, _download_file)
 
     for thread in thread_list:
         thread.join()
@@ -243,44 +246,6 @@ def _download_file(file_url: str, destination_folder: str):
         return
 
     DB.add_file(extract_file_id(file_url), file_full_name)
-
-
-def extract_filename(content_disposition: str) -> str:
-    """
-    A robust attempt to parse RFC 5987 (filename*=UTF-8\'\') or old-school filename=\"...\".
-    The result of this function should be passed to sanitize_filename.
-    """
-    if not content_disposition:
-        return None
-
-    # 1) Check for filename*= (RFC 5987)
-    match_filename_star = re.search(r'filename\*\s*=\s*(?:[^\\\']+\\\'\\\')?(.+)', content_disposition, flags=re.IGNORECASE)
-    if match_filename_star:
-        encoded_part = match_filename_star.group(1).strip()
-        if encoded_part.startswith("UTF-8''"):
-            encoded_part = encoded_part[len("UTF-8''"):]
-        try:
-            decoded = unquote(encoded_part, encoding='utf-8', errors='replace')
-            # Ensure proper handling of Turkish characters
-            decoded = decoded.encode('latin1').decode('utf-8')
-            return decoded
-        except UnicodeError:
-            return unquote(encoded_part, encoding='utf-8', errors='replace')
-
-    # 2) Otherwise fallback to filename=
-    match_filename = re.search(r'filename\s*=\s*("([^"]+)"|([^";]+))', content_disposition, flags=re.IGNORECASE)
-    if match_filename:
-        filename_candidate = match_filename.group(1)
-        filename_candidate = filename_candidate.strip('"')
-        try:
-            filename_candidate = unquote(filename_candidate, encoding='utf-8', errors='replace')
-            # Ensure proper handling of Turkish characters
-            filename_candidate = filename_candidate.encode('latin1').decode('utf-8')
-            return filename_candidate
-        except UnicodeError:
-            return unquote(filename_candidate, encoding='utf-8', errors='replace')
-
-    return None
 
 
 def extract_file_id(file_url: str) -> int:

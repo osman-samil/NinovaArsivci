@@ -41,14 +41,12 @@ def get_course_list() -> tuple[Course]:
 
             crn = link_text.replace("CRN:", "").strip()
 
-            # --- NEW: De-duplication logic ---
             if crn in processed_crns:
                 logger.verbose(f"Yinelenen CRN {crn} atlanıyor.")
                 continue
             processed_crns.add(crn)
-            # --- End of De-duplication logic ---
 
-            link = crn_link_tag["href"]
+            link = crn_link_tag["href"].strip()
             
             ders_info_page = session.get(URL + link + "/SinifBilgileri").content.decode("utf-8")
             ders_info_soup = BeautifulSoup(ders_info_page, "lxml")
@@ -74,7 +72,6 @@ def get_course_list() -> tuple[Course]:
 
 def filter_courses(courses: tuple[Course]) -> tuple[Course]:
     for i, course in enumerate(courses):
-        # Display the CRN to differentiate between sections of the same course
         print(f"{i} - {course.code} (CRN: {course.crn}) | {course.name}")
         
     user_response = input(
@@ -102,7 +99,6 @@ Tüm dersleri indirmek için boş bırakın ve enter'a basın
 
         indirilecek_dersler = ""
         for course in courses_filtered:
-            # Add CRN to the confirmation message
             indirilecek_dersler += f"{course.code} (CRN: {course.crn}), "
         print(f"{indirilecek_dersler.strip(', ')} dersleri indirilecek.")
         return courses_filtered

@@ -35,7 +35,7 @@ def get_args(**arg_flags) -> dict:
         arg_index += 1
         while arg_index < len(argv):
             flag = argv[arg_index]
-            flag = flag[1:]  # bayraktaki '-' işaretini kaldır
+            flag = flag.lstrip('-')  # bayraktaki '-' veya '--' işaretini kaldır
             if flag in arg_flags:
                 if arg_flags[flag] == 0:
                     arg_dict[flag] = None
@@ -62,7 +62,7 @@ def get_args(**arg_flags) -> dict:
                     arg_dict[flag] = tuple(params)
                 else:
                     arg_dict[flag] = None
-                flag = argv[arg_index][1:]
+                flag = argv[arg_index].lstrip('-')
                 params = list()
             else:
                 params.append(argv[arg_index])

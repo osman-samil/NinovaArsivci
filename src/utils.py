@@ -1,5 +1,6 @@
 import re
 import os
+from urllib.parse import unquote
 
 def fix_turkish_characters(text: str) -> str:
     """
@@ -67,4 +68,41 @@ def sanitize_filename(filename: str) -> str:
     if not filename:
         return "_final_empty_fallback_"
         
-    return filename 
+    return filename
+
+def extract_filename(content_disposition: str) -> str:
+    """
+    A robust attempt to parse RFC 5987 (filename*=UTF-8\'\') or old-school filename=\"...\".
+    The result of this function should be passed to sanitize_filename.
+    """
+    if not content_disposition:
+        return None
+
+    # 1) Check for filename*= (RFC 5987)
+    match_filename_star = re.search(r'filename\*\s*=\s*(?:[^\\\']+\\\'\\\')?(.+)', content_disposition, flags=re.IGNORECASE)
+    if match_filename_star:
+        encoded_part = match_filename_star.group(1).strip()
+        if encoded_part.startswith("UTF-8''"):
+            encoded_part = encoded_part[len("UTF-8''"):]
+        try:
+            decoded = unquote(encoded_part, encoding='utf-8', errors='replace')
+            # Ensure proper handling of Turkish characters
+            decoded = decoded.encode('latin1').decode('utf-8')
+            return decoded
+        except UnicodeError:
+            return unquote(encoded_part, encoding='utf-8', errors='replace')
+
+    # 2) Otherwise fallback to filename=
+    match_filename = re.search(r'filename\s*=\s*("([^"]+)"|([^";]+))', content_disposition, flags=re.IGNORECASE)
+    if match_filename:
+        filename_candidate = match_filename.group(1)
+        filename_candidate = filename_candidate.strip('"')
+        try:
+            filename_candidate = unquote(filename_candidate, encoding='utf-8', errors='replace')
+            # Ensure proper handling of Turkish characters
+            filename_candidate = filename_candidate.encode('latin1').decode('utf-8')
+            return filename_candidate
+        except UnicodeError:
+            return unquote(filename_candidate, encoding='utf-8', errors='replace')
+
+    return None 
